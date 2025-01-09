@@ -1,4 +1,5 @@
 import torch
+import transformers
 
 
 from eagle.model.ea_model import EaModel
