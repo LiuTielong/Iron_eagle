@@ -1,6 +1,7 @@
 import torch
 import transformers
 import numpy
+print("Loading model...")
 
 from eagle.model.ea_model import EaModel
 from fastchat.model import get_conversation_template
