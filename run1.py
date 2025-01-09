@@ -11,3 +11,7 @@ print(D)
 
 E = torch.matmul(A, B)
 print(E)
+
+F = torch.bmm(A, B)
+
+print(F)
