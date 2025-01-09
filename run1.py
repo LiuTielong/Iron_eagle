@@ -8,3 +8,6 @@ print(C)
 
 D = torch.mm(A, B)
 print(D)
+
+E = torch.matmul(A, B)
+print(E)
