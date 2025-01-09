@@ -5,3 +5,6 @@ B = torch.randn(3, 3)
 
 C = A * B
 print(C)
+
+D = torch.mm(A, B)
+print(D)
