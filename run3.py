@@ -14,13 +14,3 @@ model = EaModel.from_pretrained(
     device_map="auto",
     total_token=-1
 )
-model.eval()
-your_message="Hello"
-conv = get_conversation_template("vicuna")
-conv.append_message(conv.roles[0], your_message)
-conv.append_message(conv.roles[1], None)
-prompt = conv.get_prompt()
-input_ids=model.tokenizer([prompt]).input_ids
-input_ids = torch.as_tensor(input_ids).cuda()
-output_ids=model.eagenerate(input_ids,temperature=0.5,max_new_tokens=512)
-output=model.tokenizer.decode(output_ids[0])
