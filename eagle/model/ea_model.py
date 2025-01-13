@@ -35,7 +35,7 @@ class EaModel(nn.Module):
             top_k,
             threshold,
             ea_layer_state_dict
-    ):
+    ):  # 本模型包含两部分，分别是base_model和ea_layer.
 
         super().__init__()
         self.base_model = base_model
@@ -216,7 +216,7 @@ class EaModel(nn.Module):
 
 
 
-        # Initialize the past key and value states
+        # step 1. Initialize the past key and value states
         if hasattr(self, "past_key_values"):
             past_key_values = self.past_key_values
             past_key_values_data = self.past_key_values_data
@@ -237,16 +237,17 @@ class EaModel(nn.Module):
         reset_tree_mode(self)
         draft_tokens, retrieve_indices,tree_mask,tree_position_ids, logits, hidden_state, sample_token = initialize_tree(
             input_ids, self, past_key_values, logits_processor
-        )
+        )   # step 2: 初始化这个tree
         new_token = 0
 
+        accept_length_s = []
         for idx in range(max_length):
             #with Timer("all"):
             self.base_model.model.tree_mask = tree_mask
 
             draft_tokens=draft_tokens.to(input_ids.device)
             #with Timer("tree_decoding"):
-            logits, hidden_state_new, outputs = tree_decoding(
+            logits, hidden_state_new, outputs = tree_decoding(          # 得到logits: [26,7,32000]
                 self,
                 draft_tokens,
                 past_key_values,
@@ -258,12 +259,14 @@ class EaModel(nn.Module):
             #logits = logits[0, retrieve_indices]
             draft_tokens=torch.cat((draft_tokens,padding),dim=1)
             candidates=draft_tokens[0,retrieve_indices]
-            best_candidate, accept_length, sample_p = evaluate_posterior(
+            best_candidate, accept_length, sample_p = evaluate_posterior(   # 经过这么一个函数去采样，得到接受的token数
                 logits, candidates, logits_processor
             )
+            accept_length_s.append(accept_length)
             # print(accept_length)
+            # 下面我要统计所有数据的average_accept_length.
             #with Timer("update_inference_inputs"):
-            input_ids, draft_tokens, retrieve_indices,tree_mask,tree_position_ids, new_token, hidden_state, sample_token = update_inference_inputs(
+            input_ids, draft_tokens, retrieve_indices,tree_mask,tree_position_ids, new_token, hidden_state, sample_token = update_inference_inputs(  # 这个函数中又有新的topK generate.
                 input_ids,
                 candidates,
                 best_candidate,
@@ -289,9 +292,9 @@ class EaModel(nn.Module):
             if input_ids.shape[1] > max_length:
                 break
         if not log:
-            return input_ids
+            return input_ids, accept_length_s
         else:
-            return input_ids, new_token, idx
+            return input_ids, new_token, idx, accept_length_s
 
 
     @torch.no_grad()

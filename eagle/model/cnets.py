@@ -499,7 +499,7 @@ class Model(nn.Module):
             self.embed_tokens.weight.data = tensor
 
         self.top_k = top_k
-        self.total_tokens = total_tokens - 1
+        self.total_tokens = total_tokens - 1            # 为什么要减1,因为还有一个节点是树的根节点
         self.depth = depth
         self.threshold = math.log(threshold)
         # print("total_tokens",total_tokens)
@@ -695,9 +695,9 @@ class Model(nn.Module):
         scores_list.append(scores[None])
         parents_list.append(torch.zeros(1, dtype=torch.long, device=scores.device))
         ss_token.append(topk_index)
-        input_ids = topk_index
+        input_ids = topk_index              # 下一次forward就要用这topK个token并行输入draft model。
         input_hidden = last_hidden[None].repeat(1, top_k, 1)
-        tree_mask = self.tree_mask_init
+        tree_mask = self.tree_mask_init     # 第一次看到这里tree_mask是一个单位矩阵，合理，因为这top-10个token此时是并列的。
         topk_cs_index = torch.arange(top_k, device=self.embed_tokens.weight.device)
 
         # 4
@@ -722,7 +722,7 @@ class Model(nn.Module):
             top = torch.topk(last_p, top_k, dim=-1)
             topk_index, topk_p = top.indices, top.values
 
-            cu_scores = topk_p + scores[:, None]
+            cu_scores = topk_p + scores[:, None]                # 这里是加法，而不是论文中说的乘法，这是因为代码中对分数都取了对数。
 
             topk_cs = torch.topk(cu_scores.view(-1), top_k, dim=-1)
             topk_cs_index, topk_cs_p = topk_cs.indices, topk_cs.values
@@ -765,7 +765,7 @@ class Model(nn.Module):
         mask_index = mask_index + 1
         mask_index_list = mask_index.tolist()
         # with Timer("mask"):
-        tree_mask = torch.eye(total_tokens + 1).bool()
+        tree_mask = torch.eye(total_tokens + 1).bool()      # [60,60]
         tree_mask[:, 0] = True
         for i in range(total_tokens):
             tree_mask[i + 1].add_(tree_mask[mask_index_list[i]])

@@ -9,6 +9,9 @@ import os
 script_dir = os.path.dirname(__file__)
 parent_dir = os.path.dirname(script_dir)
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
+import sys
+sys.path.append("./")
+sys.path.append("../")
 import time
 
 import shortuuid
@@ -16,9 +19,9 @@ from fastchat.llm_judge.common import load_questions
 from fastchat.model import get_conversation_template
 from tqdm import tqdm
 
-from ..model.ea_model import EaModel
-from ..model.kv_cache import initialize_past_key_values
-from ..model.utils import *
+from eagle.model.ea_model import EaModel
+from eagle.model.kv_cache import initialize_past_key_values
+from eagle.model.utils import *
 
 
 
@@ -38,7 +41,7 @@ def run_eval(
         temperature,
         args
 ):
-    questions = load_questions(question_file, question_begin, question_end)
+    questions = load_questions(question_file, question_begin, question_end)  # 一共加载了80条问题
     # random shuffle the questions to balance the loading
     # random.shuffle(questions)
     shuffled_ids = [q["question_id"] for q in questions]
@@ -56,7 +59,7 @@ def run_eval(
     else:
         get_answers_func = get_model_answers
 
-    chunk_size = len(questions) // (num_gpus_total // num_gpus_per_model)  # // 2
+    chunk_size = len(questions) // (num_gpus_total // num_gpus_per_model)  # 分块处理，不过我这里只有一块，所以chunk_size=80。
     ans_handles = []
     for i in range(0, len(questions), chunk_size):
         ans_handles.append(
@@ -103,9 +106,9 @@ def get_model_answers(
         top_k=args.top_k,
         torch_dtype=torch.float16,
         low_cpu_mem_usage=True,
-        # load_in_8bit=True,
+        load_in_8bit=args.load_in_8bit,
         device_map="auto"
-    )
+    )       # step 1: 加载模型，包括原始模型和EAGLE小模型，中间还涉及很多操作，包括一些初始化。
 
     tokenizer = model.get_tokenizer()
 
@@ -135,14 +138,14 @@ def get_model_answers(
             qs = question["turns"][j]
             conv.append_message(conv.roles[0], qs)
             conv.append_message(conv.roles[1], None)
-            prompt = conv.get_prompt()
+            prompt = conv.get_prompt()  # 这个挺好，将原来的问题搞了一些prompt工程。
             input_ids = tokenizer([prompt]).input_ids
 
             # try:
             torch.cuda.synchronize()
             start_time = time.time()
 
-            output_ids, new_token, idx = model.eagenerate(
+            output_ids, new_token, idx, accept_length_s = model.eagenerate(  # 非常重要的函数了，弄懂了就知道EAGLE的推理过程了。
                 torch.as_tensor(input_ids).cuda(),
                 temperature=temperature,
                 log=True
@@ -186,6 +189,7 @@ def get_model_answers(
     print('Warmup done')
 
     # questions=questions[6:]
+    all_accept_length_s = []
     for question in tqdm(questions):
 
         choices = []
@@ -206,11 +210,12 @@ def get_model_answers(
 
                 torch.cuda.synchronize()
                 start_time = time.time()
-                output_ids, new_token, idx = model.eagenerate(
+                output_ids, new_token, idx, accept_length_s = model.eagenerate(
                     torch.as_tensor(input_ids).cuda(),
                     temperature=temperature,
                     log=True
                 )
+                all_accept_length_s.append(accept_length_s)
                 torch.cuda.synchronize()
                 total_time = time.time() - start_time
                 output_ids = output_ids[0][len(input_ids[0]):]
@@ -262,6 +267,11 @@ def get_model_answers(
             }
             fout.write(json.dumps(ans_json) + "\n")
 
+    # 接下来我还想算一下平均接受的token数
+    flattened = [accept_length for accept_length_s in all_accept_length_s for accept_length in accept_length_s]
+    average = sum(flattened) / len(flattened)
+    print("这个数据集的平均预测对的tokens数量为:", average)
+
 
 def reorg_answer_file(answer_file):
     """Sort by question id and de-duplication"""
@@ -288,8 +298,8 @@ if __name__ == "__main__":
     parser.add_argument("--base-model-path", type=str, default="/home/lyh/weights/hf/llama2chat/70B/",
                         help="1")
     parser.add_argument(
-        "--load-in-8bit", action="store_false", help="Use 8-bit quantization"
-    )
+        "--load-in-8bit", action="store_true", help="Use 8-bit quantization"
+    )  # 8 bit量化以后要掌握啊
     parser.add_argument("--model-id", type=str, default="ess-vicuna-70b-fp16")
     parser.add_argument(
         "--bench-name",
@@ -317,25 +327,25 @@ if __name__ == "__main__":
         type=int,
         default=60,
         help="The maximum number of new generated tokens.",
-    )
+    )  # 在生成draft-tree之后，进行裁剪，只有这么多个tokens能进入verify阶段。这就是论文中的m
     parser.add_argument(
         "--depth",
         type=int,
         default=5,
         help="The maximum number of new generated tokens.",
-    )
+    )   # 这是draft tree的最大深度。
     parser.add_argument(
         "--top-k",
         type=int,
         default=10,
         help="The maximum number of new generated tokens.",
-    )
+    )   # 每一层节点在往下生成时，最多有top-k个节点有资格继续生成，而且每个节点生成top-k个子节点。
     parser.add_argument(
         "--num-choices",
         type=int,
         default=1,
         help="How many completion choices to generate.",
-    )
+    )   # 这是什么？
     parser.add_argument(
         "--num-gpus-per-model",
         type=int,
@@ -361,13 +371,13 @@ if __name__ == "__main__":
         "--tree-choices",
         type=str,
         default="mc_sim_7b_63",
-    )
+    )   # 这又是什么？
 
     args = parser.parse_args()
 
     args.model_id = args.model_id + "-temperature-" + str(args.temperature)
     if args.num_gpus_total // args.num_gpus_per_model > 1:
-        import ray
+        import ray  # 分布式机器学习框架
 
         ray.init()
 
